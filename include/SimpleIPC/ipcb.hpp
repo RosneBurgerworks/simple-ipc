@@ -22,7 +22,6 @@
 #include <type_traits>
 #include <functional>
 
-#include "util.hpp"
 #include "cmp.hpp"
 
 /* This implementation allows up to 32 clients (unsigned int) */
@@ -39,8 +38,7 @@ constexpr unsigned command_data   = 64;                    // Guaranteed space t
 struct peer_data_s
 {
     bool free;
-    pid_t pid;
-    unsigned long starttime;
+    time_t heartbeat;
 };
 
 struct command_s
@@ -87,6 +85,11 @@ public:
 
     ~Peer()
     {
+        if (heartbeat_thread)
+        {
+            pthread_cancel(heartbeat_thread);
+            pthread_join(heartbeat_thread, nullptr);
+        }
         if (is_manager)
         {
             pthread_mutex_destroy(&memory->mutex);
@@ -98,8 +101,11 @@ public:
         {
             return;
         }
-        MutexLock lock(this);
-        memory->peer_data[client_id].free = true;
+        if (memory)
+        {
+            MutexLock lock(this);
+            memory->peer_data[client_id].free = true;
+        }
     }
 
     typedef std::function<void(command_s &, void *)> CommandCallbackFn_t;
@@ -128,7 +134,16 @@ public:
     {
         return (last_command != memory->command_count);
     }
-
+    static void *Heartbeat(void *pdata)
+    {
+        auto data = reinterpret_cast<peer_data_s *>(pdata);
+        while (true)
+        {
+            data->heartbeat = time(nullptr);
+            sleep(1);
+        }
+        return nullptr;
+    }
     /*
      * Actually connects to server
      */
@@ -146,14 +161,14 @@ public:
         }
         ftruncate(fd, sizeof(memory_t));
         umask(old_mask);
-        memory = (memory_t *) mmap(0, sizeof(memory_t), PROT_WRITE | PROT_READ | PROT_EXEC, MAP_SHARED, fd, 0);
+        memory = (memory_t *) mmap(0, sizeof(memory_t), PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
         close(fd);
         pool = new CatMemoryPool(&memory->pool, pool_size);
         if (is_manager)
         {
             InitManager();
         }
-        if (not is_ghost)
+        if (!is_ghost)
         {
             client_id = FirstAvailableSlot();
             StorePeerData();
@@ -166,6 +181,8 @@ public:
         {
             last_command = memory->command_count;
         }
+        if (!is_ghost && pthread_create(&heartbeat_thread, nullptr, Heartbeat, &memory->peer_data[client_id]))
+            throw std::runtime_error("cannot create hearbeat thread");
     }
 
     /*
@@ -189,12 +206,9 @@ public:
      */
     bool IsPeerDead(unsigned id) const
     {
-        if (memory->peer_data[id].free)
+        if (time(nullptr) - memory->peer_data[id].heartbeat >= 10)
             return true;
-        proc_stat_s stat;
-        read_stat(memory->peer_data[id].pid, &stat);
-        if (stat.starttime != memory->peer_data[id].starttime)
-            return true;
+
         return false;
     }
 
@@ -245,11 +259,7 @@ public:
             return;
         }
         MutexLock lock(this);
-        proc_stat_s stat;
-        read_stat(getpid(), &stat);
-        memory->peer_data[client_id].free      = false;
-        memory->peer_data[client_id].pid       = getpid();
-        memory->peer_data[client_id].starttime = stat.starttime;
+        memory->peer_data[client_id].free = false;
     }
 
     /*
@@ -335,9 +345,10 @@ public:
     CatMemoryPool *pool{ nullptr };
     const std::string name;
     bool process_old_commands{ true };
-    ipc_memory_s<S, U> *memory{ nullptr };
+    memory_t *memory{ nullptr };
     const bool is_manager{ false };
     const bool is_ghost{ false };
+    pthread_t heartbeat_thread{ 0 };
 };
 
 } // namespace cat_ipc
