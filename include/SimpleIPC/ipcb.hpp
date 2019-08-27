@@ -22,6 +22,7 @@
 #include <type_traits>
 #include <functional>
 
+#include "util.hpp"
 #include "cmp.hpp"
 
 /* This implementation allows up to 32 clients (unsigned int) */
@@ -39,6 +40,8 @@ struct peer_data_s
 {
     bool free;
     time_t heartbeat;
+    pid_t pid;
+    unsigned long starttime;
 };
 
 struct command_s
@@ -168,7 +171,7 @@ public:
         {
             InitManager();
         }
-        if (!is_ghost)
+        if (not is_ghost)
         {
             client_id = FirstAvailableSlot();
             StorePeerData();
@@ -259,7 +262,11 @@ public:
             return;
         }
         MutexLock lock(this);
-        memory->peer_data[client_id].free = false;
+        proc_stat_s stat;
+        read_stat(getpid(), &stat);
+        memory->peer_data[client_id].free      = false;
+        memory->peer_data[client_id].pid       = getpid();
+        memory->peer_data[client_id].starttime = stat.starttime;
     }
 
     /*
