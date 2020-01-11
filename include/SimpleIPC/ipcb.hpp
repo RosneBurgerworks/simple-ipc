@@ -31,8 +31,9 @@
 namespace cat_ipc
 {
 
-constexpr unsigned max_peers      = 32;
-constexpr unsigned command_buffer = 64;
+// This was once 32 but had to be increased because we can actually host more catbots
+constexpr unsigned max_peers      = 128;
+constexpr unsigned command_buffer = 128;
 constexpr unsigned pool_size      = command_buffer * 4096; // A lot of space.
 constexpr unsigned command_data   = 64;                    // Guaranteed space that every command has
 
