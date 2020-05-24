@@ -32,7 +32,7 @@ namespace cat_ipc
 {
 
 // This was once 32 but had to be increased because we can actually host more catbots
-constexpr unsigned max_peers      = 255;
+constexpr unsigned max_peers      = 254;
 constexpr unsigned command_buffer = max_peers * 2;
 constexpr unsigned pool_size      = command_buffer * 4096; // A lot of space.
 constexpr unsigned command_data   = 64;            // Guaranteed space that every command has
@@ -302,7 +302,7 @@ public:
             if (cmd.command_number > last_command)
             {
                 last_command = cmd.command_number;
-                if (cmd.sender != client_id && (client_id == -1 || cmd.target_peer < 0 || cmd.target_peer == client_id))
+                if (cmd.sender != client_id && !is_ghost && (cmd.target_peer < 0 || cmd.target_peer == client_id))
                 {
                     if (callback)
                     {
