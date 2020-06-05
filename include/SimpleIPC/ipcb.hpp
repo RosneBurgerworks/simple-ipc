@@ -32,10 +32,10 @@ namespace cat_ipc
 {
 
 // This was once 32 but had to be increased because we can actually host more catbots
-constexpr unsigned max_peers      = 128;
-constexpr unsigned command_buffer = 128;
+constexpr unsigned max_peers      = 254;
+constexpr unsigned command_buffer = max_peers * 2;
 constexpr unsigned pool_size      = command_buffer * 4096; // A lot of space.
-constexpr unsigned command_data   = 64;                    // Guaranteed space that every command has
+constexpr unsigned command_data   = 64;            // Guaranteed space that every command has
 
 struct peer_data_s
 {
@@ -48,8 +48,8 @@ struct peer_data_s
 struct command_s
 {
     unsigned command_number;              // sequentional command number
-    unsigned peer_mask;                   // bitfield with peer ID's which should process the message
-    unsigned sender;                      // sender ID
+    signed target_peer;                   // Peer ID which should process the message
+    signed sender;                        // sender ID
     unsigned long payload_offset;         // offset from pool start, points to payload allocated in pool
     unsigned payload_size;                // size of payload
     unsigned cmd_type;                    // stores user-defined command ID
@@ -179,7 +179,7 @@ public:
         }
         else
         {
-            client_id = unsigned(-1);
+            client_id = -1;
         }
         if (!process_old_commands)
         {
@@ -192,10 +192,10 @@ public:
     /*
      * Checks every slot in memory->peer_data, throws runtime_error if there are no free slots
      */
-    unsigned FirstAvailableSlot()
+    signed FirstAvailableSlot()
     {
         MutexLock lock(this);
-        for (unsigned i = 0; i < max_peers; i++)
+        for (signed i = 0; i < max_peers; i++)
         {
             if (memory->peer_data[i].free)
             {
@@ -208,7 +208,7 @@ public:
     /*
      * Returns true if the slot can be marked free
      */
-    bool IsPeerDead(unsigned id) const
+    bool IsPeerDead(signed id) const
     {
         if (time(nullptr) - memory->peer_data[id].heartbeat >= 10)
             return true;
@@ -228,7 +228,7 @@ public:
         pthread_mutexattr_setpshared(&attr, 1);
         pthread_mutex_init(&memory->mutex, &attr);
         pthread_mutexattr_destroy(&attr);
-        for (unsigned i = 0; i < max_peers; i++)
+        for (signed i = 0; i < max_peers; i++)
             memory->peer_data[i].free = true;
         pool->init();
     }
@@ -240,7 +240,7 @@ public:
     {
         MutexLock lock(this);
         memory->peer_count = 0;
-        for (unsigned i = 0; i < max_peers; i++)
+        for (signed i = 0; i < max_peers; i++)
         {
             if (IsPeerDead(i))
             {
@@ -302,7 +302,7 @@ public:
             if (cmd.command_number > last_command)
             {
                 last_command = cmd.command_number;
-                if (cmd.sender != client_id && (!cmd.peer_mask || ((1 << client_id) & cmd.peer_mask)))
+                if (cmd.sender != client_id && !is_ghost && (cmd.target_peer < 0 || cmd.target_peer == client_id))
                 {
                     if (callback)
                     {
@@ -320,7 +320,7 @@ public:
     /*
      * Posts a command to memory, increases command_count
      */
-    void SendMessage(const char *data_small, unsigned peer_mask, unsigned command_type, const void *payload, size_t payload_size)
+    void SendMessage(const char *data_small, signed peer_id, unsigned command_type, const void *payload, size_t payload_size)
     {
         MutexLock lock(this);
         command_s &cmd = memory->commands[++memory->command_count % command_buffer];
@@ -341,13 +341,13 @@ public:
         }
         cmd.cmd_type       = command_type;
         cmd.sender         = client_id;
-        cmd.peer_mask      = peer_mask;
+        cmd.target_peer    = peer_id;
         cmd.command_number = memory->command_count;
     }
 
     std::unordered_map<unsigned, CommandCallbackFn_t> callback_map{};
     bool connected{ false };
-    unsigned client_id{ 0 };
+    signed client_id{ 0 };
     unsigned long last_command{ 0 };
     CommandCallbackFn_t callback{ nullptr };
     CatMemoryPool *pool{ nullptr };
