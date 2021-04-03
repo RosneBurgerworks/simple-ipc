@@ -35,7 +35,7 @@ namespace cat_ipc
 constexpr unsigned max_peers      = 254;
 constexpr unsigned command_buffer = max_peers * 2;
 constexpr unsigned pool_size      = command_buffer * 4096; // A lot of space.
-constexpr unsigned command_data   = 64;            // Guaranteed space that every command has
+constexpr unsigned command_data   = 64;                    // Guaranteed space that every command has
 
 struct peer_data_s
 {
@@ -174,6 +174,7 @@ public:
         }
         if (not is_ghost)
         {
+            MutexLock lock(this);
             client_id = FirstAvailableSlot();
             StorePeerData();
         }
@@ -194,7 +195,6 @@ public:
      */
     signed FirstAvailableSlot()
     {
-        MutexLock lock(this);
         for (signed i = 0; i < max_peers; i++)
         {
             if (memory->peer_data[i].free)
@@ -262,7 +262,6 @@ public:
         {
             return;
         }
-        MutexLock lock(this);
         proc_stat_s stat;
         read_stat(getpid(), &stat);
         memory->peer_data[client_id].free      = false;
