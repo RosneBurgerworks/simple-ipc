@@ -24,6 +24,8 @@
 
 #include "util.hpp"
 #include "cmp.hpp"
+#include <boost/interprocess/sync/interprocess_mutex.hpp>
+#include <boost/thread/mutex.hpp>
 
 /* This implementation allows up to 32 clients (unsigned int) */
 /* very strange mix of P2P and client-server */
@@ -63,14 +65,14 @@ template <typename S, typename U> struct ipc_memory_s
     static_assert(std::is_pod<S>::value, "Global data struct must be POD");
     static_assert(std::is_pod<U>::value, "Peer data struct must be POD");
 
-    pthread_mutex_t mutex;              // IPC mutex, must be locked every time you access ipc_memory_s
-    unsigned peer_count;                // count of alive peers, managed by "manager" (server)
-    unsigned long command_count;        // last command number + 1
-    peer_data_s peer_data[max_peers];   // state of each peer, managed by server
-    command_s commands[command_buffer]; // command buffer, every peer can write/read here
-    unsigned char pool[pool_size];      // pool for storing command payloads
-    S global_data;                      // some data, struct is defined by user
-    U peer_user_data[max_peers];        // some data for each peer, struct is defined by user
+    boost::interprocess::interprocess_mutex mutex; // IPC mutex, must be locked every time you access ipc_memory_s
+    unsigned peer_count;                           // count of alive peers, managed by "manager" (server)
+    unsigned long command_count;                   // last command number + 1
+    peer_data_s peer_data[max_peers];              // state of each peer, managed by server
+    command_s commands[command_buffer];            // command buffer, every peer can write/read here
+    unsigned char pool[pool_size];                 // pool for storing command payloads
+    S global_data;                                 // some data, struct is defined by user
+    U peer_user_data[max_peers];                   // some data for each peer, struct is defined by user
 };
 
 template <typename S, typename U> class Peer
@@ -96,7 +98,6 @@ public:
         }
         if (is_manager)
         {
-            pthread_mutex_destroy(&memory->mutex);
             shm_unlink(name.c_str());
             munmap(memory, sizeof(memory_t));
             return;
@@ -107,29 +108,13 @@ public:
         }
         if (memory)
         {
-            MutexLock lock(this);
+            this->memory->mutex.lock();
             memory->peer_data[client_id].free = true;
+            this->memory->mutex.unlock();
         }
     }
 
     typedef std::function<void(command_s &, void *)> CommandCallbackFn_t;
-
-    // do MutexLock lock(this); in each function where shared memory is accessed
-    // when the object goes out of scope, mutex is unlocked
-    class MutexLock
-    {
-    public:
-        MutexLock(Peer *parent) : parent(parent)
-        {
-            pthread_mutex_lock(&parent->memory->mutex);
-        }
-        ~MutexLock()
-        {
-            pthread_mutex_unlock(&parent->memory->mutex);
-        }
-
-        Peer *parent;
-    };
 
     /*
      * Checks if peer has new commands to process (non-blocking)
@@ -174,9 +159,10 @@ public:
         }
         if (not is_ghost)
         {
-            MutexLock lock(this);
+            this->memory->mutex.lock();
             client_id = FirstAvailableSlot();
             StorePeerData();
+            this->memory->mutex.unlock();
         }
         else
         {
@@ -223,11 +209,6 @@ public:
     void InitManager()
     {
         memset(memory, 0, sizeof(memory_t));
-        pthread_mutexattr_t attr;
-        pthread_mutexattr_init(&attr);
-        pthread_mutexattr_setpshared(&attr, 1);
-        pthread_mutex_init(&memory->mutex, &attr);
-        pthread_mutexattr_destroy(&attr);
         for (signed i = 0; i < max_peers; i++)
             memory->peer_data[i].free = true;
         pool->init();
@@ -238,7 +219,7 @@ public:
      */
     void SweepDead()
     {
-        MutexLock lock(this);
+        this->memory->mutex.lock();
         memory->peer_count = 0;
         for (signed i = 0; i < max_peers; i++)
         {
@@ -251,6 +232,7 @@ public:
                 memory->peer_count++;
             }
         }
+        this->memory->mutex.unlock();
     }
 
     /*
@@ -321,7 +303,7 @@ public:
      */
     void SendMessage(const char *data_small, signed peer_id, unsigned command_type, const void *payload, size_t payload_size)
     {
-        MutexLock lock(this);
+        this->memory->mutex.lock();
         command_s &cmd = memory->commands[++memory->command_count % command_buffer];
         if (cmd.payload_size)
         {
@@ -342,6 +324,7 @@ public:
         cmd.sender         = client_id;
         cmd.target_peer    = peer_id;
         cmd.command_number = memory->command_count;
+        this->memory->mutex.unlock();
     }
 
     std::unordered_map<unsigned, CommandCallbackFn_t> callback_map{};
