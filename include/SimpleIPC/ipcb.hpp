@@ -5,10 +5,9 @@
  *      Author: nullifiedcat
  */
 
-#ifndef IPCB_HPP_
-#define IPCB_HPP_
+#pragma once
 
-#include <stddef.h>
+#include <cstddef>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -26,13 +25,13 @@
 #include "cmp.hpp"
 #include <boost/interprocess/sync/interprocess_mutex.hpp>
 #include <boost/thread/mutex.hpp>
+#include <utility>
 
 /* This implementation allows up to 32 clients (unsigned int) */
 /* very strange mix of P2P and client-server */
 
 namespace cat_ipc
 {
-
 // This was once 32 but had to be increased because we can actually host more catbots
 constexpr unsigned max_peers      = 254;
 constexpr unsigned command_buffer = max_peers * 2;
@@ -50,8 +49,8 @@ struct peer_data_s
 struct command_s
 {
     unsigned command_number;              // sequentional command number
-    signed target_peer;                   // Peer ID which should process the message
-    signed sender;                        // sender ID
+    int target_peer;                      // Peer ID which should process the message
+    int sender;                           // sender ID
     unsigned long payload_offset;         // offset from pool start, points to payload allocated in pool
     unsigned payload_size;                // size of payload
     unsigned cmd_type;                    // stores user-defined command ID
@@ -66,11 +65,11 @@ template <typename S, typename U> struct ipc_memory_s
     static_assert(std::is_pod<U>::value, "Peer data struct must be POD");
 
     boost::interprocess::interprocess_mutex mutex; // IPC mutex, must be locked every time you access ipc_memory_s
-    unsigned peer_count;                           // count of alive peers, managed by "manager" (server)
-    unsigned long command_count;                   // last command number + 1
-    peer_data_s peer_data[max_peers];              // state of each peer, managed by server
-    command_s commands[command_buffer];            // command buffer, every peer can write/read here
-    unsigned char pool[pool_size];                 // pool for storing command payloads
+    unsigned peer_count{};                         // count of alive peers, managed by "manager" (server)
+    unsigned long command_count{};                 // last command number + 1
+    peer_data_s peer_data[max_peers]{};            // state of each peer, managed by server
+    command_s commands[command_buffer]{};          // command buffer, every peer can write/read here
+    unsigned char pool[pool_size]{};               // pool for storing command payloads
     S global_data;                                 // some data, struct is defined by user
     U peer_user_data[max_peers];                   // some data for each peer, struct is defined by user
 };
@@ -85,7 +84,7 @@ public:
      * process_old_commands: if false, peer's last_command will be set to actual last command in memory to prevent processing outdated commands
      * manager: there must be only one manager peer in memory, if the peer is manager, it allocates/deallocates shared memory
      */
-    Peer(std::string name, bool process_old_commands = true, bool manager = false, bool ghost = false) : name(name), process_old_commands(process_old_commands), is_manager(manager), is_ghost(ghost)
+    explicit Peer(std::string name, bool process_old_commands = true, bool manager = false, bool ghost = false) : name(std::move(name)), process_old_commands(process_old_commands), is_manager(manager), is_ghost(ghost)
     {
     }
 
@@ -103,9 +102,7 @@ public:
             return;
         }
         if (is_ghost)
-        {
             return;
-        }
         if (memory)
         {
             this->memory->mutex.lock();
@@ -123,7 +120,8 @@ public:
     {
         return (last_command != memory->command_count);
     }
-    static void *Heartbeat(void *pdata)
+
+    [[noreturn]] static void *Heartbeat(void *pdata)
     {
         auto data = reinterpret_cast<peer_data_s *>(pdata);
         while (true)
@@ -131,8 +129,8 @@ public:
             data->heartbeat = time(nullptr);
             sleep(1);
         }
-        return nullptr;
     }
+
     /*
      * Actually connects to server
      */
@@ -145,19 +143,16 @@ public:
             flags |= O_CREAT;
         int fd = shm_open(name.c_str(), flags, S_IRWXU | S_IRWXG | S_IRWXO);
         if (fd == -1)
-        {
             throw std::runtime_error("server isn't running");
-        }
+
         ftruncate(fd, sizeof(memory_t));
         umask(old_mask);
-        memory = (memory_t *) mmap(0, sizeof(memory_t), PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
+        memory = (memory_t *) mmap(nullptr, sizeof(memory_t), PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
         close(fd);
         pool = new CatMemoryPool(&memory->pool, pool_size);
         if (is_manager)
-        {
             InitManager();
-        }
-        if (not is_ghost)
+        if (!is_ghost)
         {
             this->memory->mutex.lock();
             client_id = FirstAvailableSlot();
@@ -165,13 +160,11 @@ public:
             this->memory->mutex.unlock();
         }
         else
-        {
             client_id = -1;
-        }
+
         if (!process_old_commands)
-        {
             last_command = memory->command_count;
-        }
+
         if (!is_ghost && pthread_create(&heartbeat_thread, nullptr, Heartbeat, &memory->peer_data[client_id]))
             throw std::runtime_error("cannot create hearbeat thread");
     }
@@ -179,22 +172,19 @@ public:
     /*
      * Checks every slot in memory->peer_data, throws runtime_error if there are no free slots
      */
-    signed FirstAvailableSlot()
+    int FirstAvailableSlot()
     {
-        for (signed i = 0; i < max_peers; i++)
-        {
+        for (int i = 0; i < max_peers; i++)
             if (memory->peer_data[i].free)
-            {
                 return i;
-            }
-        }
+
         throw std::runtime_error("no available slots");
     }
 
     /*
      * Returns true if the slot can be marked free
      */
-    bool IsPeerDead(signed id) const
+    bool IsPeerDead(int id) const
     {
         if (time(nullptr) - memory->peer_data[id].heartbeat >= 10)
             return true;
@@ -209,7 +199,7 @@ public:
     void InitManager()
     {
         memset(memory, 0, sizeof(memory_t));
-        for (signed i = 0; i < max_peers; i++)
+        for (int i = 0; i < max_peers; i++)
             memory->peer_data[i].free = true;
         pool->init();
     }
@@ -221,16 +211,13 @@ public:
     {
         this->memory->mutex.lock();
         memory->peer_count = 0;
-        for (signed i = 0; i < max_peers; i++)
+        for (int i = 0; i < max_peers; i++)
         {
             if (IsPeerDead(i))
-            {
                 memory->peer_data[i].free = true;
-            }
+
             if (!memory->peer_data[i].free)
-            {
                 memory->peer_count++;
-            }
         }
         this->memory->mutex.unlock();
     }
@@ -244,7 +231,7 @@ public:
         {
             return;
         }
-        proc_stat_s stat;
+        proc_stat_s stat{};
         read_stat(getpid(), &stat);
         memory->peer_data[client_id].free      = false;
         memory->peer_data[client_id].pid       = getpid();
@@ -257,7 +244,7 @@ public:
      */
     void SetGeneralHandler(CommandCallbackFn_t new_callback)
     {
-        callback = new_callback;
+        callback = std::move(new_callback);
     }
 
     /*
@@ -266,9 +253,8 @@ public:
     void SetCommandHandler(unsigned command_type, CommandCallbackFn_t handler)
     {
         if (callback_map.find(command_type) != callback_map.end())
-        {
             throw std::logic_error("single command type can't have multiple callbacks (" + std::to_string(command_type) + ")");
-        }
+
         callback_map.emplace(command_type, handler);
     }
 
@@ -286,13 +272,10 @@ public:
                 if (cmd.sender != client_id && !is_ghost && (cmd.target_peer < 0 || cmd.target_peer == client_id))
                 {
                     if (callback)
-                    {
                         callback(cmd, cmd.payload_size ? pool->real_pointer<void>((void *) cmd.payload_offset) : nullptr);
-                    }
+
                     if (callback_map.find(cmd.cmd_type) != callback_map.end())
-                    {
                         callback_map[cmd.cmd_type](cmd, cmd.payload_size ? pool->real_pointer<void>((void *) cmd.payload_offset) : nullptr);
-                    }
                 }
             }
         }
@@ -301,7 +284,7 @@ public:
     /*
      * Posts a command to memory, increases command_count
      */
-    void SendMessage(const char *data_small, signed peer_id, unsigned command_type, const void *payload, size_t payload_size)
+    void SendMessage(const char *data_small, int peer_id, unsigned command_type, const void *payload, size_t payload_size)
     {
         this->memory->mutex.lock();
         command_s &cmd = memory->commands[++memory->command_count % command_buffer];
@@ -329,7 +312,7 @@ public:
 
     std::unordered_map<unsigned, CommandCallbackFn_t> callback_map{};
     bool connected{ false };
-    signed client_id{ 0 };
+    int client_id{ 0 };
     unsigned long last_command{ 0 };
     CommandCallbackFn_t callback{ nullptr };
     CatMemoryPool *pool{ nullptr };
@@ -340,7 +323,4 @@ public:
     const bool is_ghost{ false };
     pthread_t heartbeat_thread{ 0 };
 };
-
 } // namespace cat_ipc
-
-#endif /* IPCB_HPP_ */

@@ -8,9 +8,9 @@ set(include_dest "include/${PROJECT_NAME}-${PROJECT_VERSION}")
 add_library(${PROJECT_NAME} INTERFACE)
 
 target_include_directories(${PROJECT_NAME} INTERFACE
-    $<INSTALL_INTERFACE:${include_dest}/include>
-    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
-)
+        $<INSTALL_INTERFACE:${include_dest}/include>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+        )
 
 install(TARGETS ${PROJECT_NAME} EXPORT ${PROJECT_NAME} DESTINATION "${export_dest}")
 install(EXPORT ${PROJECT_NAME} DESTINATION "${export_dest}")

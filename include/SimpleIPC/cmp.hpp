@@ -5,11 +5,10 @@
  *      Author: nullifiedcat
  */
 
-#ifndef CMP_HPP_
-#define CMP_HPP_
+#pragma once
 
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 
 class CatMemoryPool
 {
@@ -35,38 +34,39 @@ public:
         unsigned blkcnt;
     };
 
-    inline void init()
+    inline void init() const
     {
         memset(base, 0, size);
-        pool_block_s zeroth_block;
+        pool_block_s zeroth_block{};
         zeroth_block.free = true;
         zeroth_block.next = (pool_block_s *) -1;
         zeroth_block.prev = (pool_block_s *) -1;
         zeroth_block.size = size;
         memcpy(base, &zeroth_block, sizeof(pool_block_s));
     }
+
     inline void *alloc(size_t size)
     {
         pool_block_s *block = FindBlock(size);
         if (block == (pool_block_s *) -1)
-        {
-            return (void *) 0;
-        }
+            return (void *) nullptr;
+
         ChipBlock(block, size);
         block->free = false;
         return (void *) ((uintptr_t)(block) + sizeof(pool_block_s));
     }
+
     inline void free(void *object)
     {
-        pool_block_s *block = (pool_block_s *) ((uintptr_t) object - sizeof(pool_block_s));
+        auto *block = (pool_block_s *) ((uintptr_t) object - sizeof(pool_block_s));
         block->free         = true;
         MendBlock(block);
     }
 
-    inline void statistics(pool_info_s &info)
+    inline void statistics(pool_info_s &info) const
     {
         memset(&info, 0, sizeof(pool_info_s));
-        pool_block_s *current = (pool_block_s *) base;
+        auto *current = (pool_block_s *) base;
         while (current)
         {
             if (current->free)
@@ -97,47 +97,45 @@ public:
     const size_t size;
 
 protected:
-    inline pool_block_s *FindBlock(size_t size)
+    inline pool_block_s *FindBlock(size_t size) const
     {
-        pool_block_s *current = (pool_block_s *) base;
+        auto *current = (pool_block_s *) base;
         while (current)
         {
-            if (current->free)
-            {
-                if (current->size >= size)
-                    return current;
-            }
+            if (current->free && current->size >= size)
+                return current;
+
             if (current->next == (void *) -1)
                 break;
             current = real_pointer<pool_block_s>(current->next);
         }
         return (pool_block_s *) -1;
     }
-    inline void ChipBlock(pool_block_s *block, size_t size)
+
+    inline void ChipBlock(pool_block_s *block, size_t size) const
     {
         if (block->size - sizeof(pool_block_s) > size)
         {
             unsigned old_size = block->size;
             block->size       = size;
-            pool_block_s new_block;
+            pool_block_s new_block{};
             new_block.prev    = pool_pointer<void>(block);
             new_block.next    = block->next;
-            new_block.free    = 1;
+            new_block.free    = true;
             new_block.size    = old_size - (size + sizeof(pool_block_s));
             void *p_new_block = (void *) ((unsigned) pool_pointer<void>(block) + sizeof(pool_block_s) + block->size);
             if (block->next != (void *) -1)
-            {
                 real_pointer<pool_block_s>(block->next)->prev = p_new_block;
-            }
             block->next = p_new_block;
             memcpy(real_pointer<void>(p_new_block), &new_block, sizeof(pool_block_s));
         }
     }
+
     inline void MendBlock(pool_block_s *block)
     {
         if (block->prev != (void *) -1)
         {
-            pool_block_s *cur_prev = real_pointer<pool_block_s>(block->prev);
+            auto *cur_prev = real_pointer<pool_block_s>(block->prev);
             if (cur_prev->free)
             {
                 MendBlock(cur_prev);
@@ -146,21 +144,20 @@ protected:
         }
         if (block->next != (void *) -1)
         {
-            pool_block_s *cur_next = real_pointer<pool_block_s>(block->next);
+            auto *cur_next = real_pointer<pool_block_s>(block->next);
             while (cur_next->free)
             {
                 block->size += sizeof(pool_block_s) + cur_next->size;
                 DeleteBlock(cur_next);
                 if (block->next != (void *) -1)
-                {
                     cur_next = real_pointer<pool_block_s>(block->next);
-                }
                 else
                     break;
             }
         }
     }
-    inline void DeleteBlock(pool_block_s *block)
+
+    inline void DeleteBlock(pool_block_s *block) const
     {
         if (block->next != (void *) -1)
             real_pointer<pool_block_s>(block->next)->prev = block->prev;
@@ -168,5 +165,3 @@ protected:
             real_pointer<pool_block_s>(block->prev)->next = block->next;
     }
 };
-
-#endif /* CMP_HPP_ */
