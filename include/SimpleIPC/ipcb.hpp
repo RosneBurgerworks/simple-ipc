@@ -80,6 +80,7 @@ public:
 
     ~Peer()
     {
+        shutting_down = true;
         if (heartbeat_thread.joinable())
             heartbeat_thread.join();
 
@@ -115,9 +116,9 @@ public:
         return last_command != memory->command_count;
     }
 
-    [[noreturn]] static void Heartbeat(PeerData *data)
+    static void Heartbeat(bool *shutting_down, PeerData *data)
     {
-        while (true)
+        while (!*shutting_down)
         {
             data->heartbeat = std::time(nullptr);
             std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -172,7 +173,7 @@ public:
 
         if (!is_ghost)
         {
-            heartbeat_thread = std::jthread(Heartbeat, &memory->peer_data[client_id]);
+            heartbeat_thread = std::jthread(Heartbeat, this->shutting_down, &memory->peer_data[client_id]);
             if (!heartbeat_thread.joinable())
                 throw std::runtime_error("Failed to crate heartbeat thread: " + std::string(strerror(errno)));
         }
@@ -336,5 +337,6 @@ private:
     bool process_old_commands{ true };
     const bool is_manager{ false };
     std::jthread heartbeat_thread;
+    bool shutting_down{false};
 };
 } // namespace cat_ipc
