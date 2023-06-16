@@ -16,14 +16,13 @@
 #include <functional>
 #include <thread>
 #include <condition_variable>
-#include <mutex>
 
 #include "util.hpp"
 #include "cmp.hpp"
 
 namespace cat_ipc
 {
-constexpr unsigned char max_peers     = UCHAR_MAX;
+constexpr unsigned int max_peers      = 254;
 constexpr unsigned int command_buffer = max_peers * 2;
 constexpr unsigned int pool_size      = command_buffer * 4096;
 constexpr unsigned int command_data   = 64;
@@ -51,8 +50,8 @@ struct Command
 // U = struct for peer data
 template <typename S, typename U> struct IPCMemory
 {
-    static_assert(std::is_standard_layout<S>::value && std::is_trivial<S>::value, "Global data struct must be POD");
-    static_assert(std::is_standard_layout<U>::value && std::is_trivial<U>::value, "Peer data struct must be POD");
+    static_assert(std::is_pod<S>::value, "Global data struct must be POD");
+    static_assert(std::is_pod<U>::value, "Peer data struct must be POD");
     boost::interprocess::interprocess_mutex mutex; // IPC mutex, must be locked every time you access IPCMemory
     unsigned int peer_count{};                     // count of alive peers, managed by "manager" (server)
     unsigned long command_count{};                 // last command number + 1
@@ -185,9 +184,9 @@ public:
      */
     int FirstAvailableSlot()
     {
-        for (unsigned int i = 0; i < max_peers; ++i)
+        for (int i = 0; i < max_peers; ++i)
             if (memory->peer_data[i].free)
-                return static_cast<int>(i);
+                return i;
 
         throw std::runtime_error("No available slots");
     }
@@ -281,7 +280,7 @@ public:
                 continue;
 
             last_command = cmd.command_number;
-            if (cmd.sender == client_id || is_ghost || (cmd.target_peer >= 0 && cmd.target_peer != client_id))
+            if (cmd.sender == client_id || is_ghost || cmd.target_peer >= 0 && cmd.target_peer != client_id)
                 continue;
 
             void *payload = cmd.payload_size ? pool->real_pointer<void>(reinterpret_cast<void *>(cmd.payload_offset)) : nullptr;
@@ -327,12 +326,12 @@ public:
     bool connected{ false };
     int client_id{ 0 };
     const bool is_ghost{ false };
-    std::shared_ptr<simple_ipc::CatMemoryPool> pool{ nullptr };
 
 private:
     std::unordered_map<unsigned int, CommandCallbackFn_t> callback_map{};
     unsigned long last_command{ 0 };
     CommandCallbackFn_t callback{ nullptr };
+    std::shared_ptr<simple_ipc::CatMemoryPool> pool{ nullptr };
     const std::string name;
     bool process_old_commands{ true };
     const bool is_manager{ false };
