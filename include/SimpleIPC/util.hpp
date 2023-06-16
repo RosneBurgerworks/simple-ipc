@@ -1,11 +1,12 @@
 /*
- * util.hpp
+ * util.h
  *
  *  Created on: Mar 19, 2017
  *      Author: nullifiedcat
  */
 
-#pragma once
+#ifndef UTIL_H_
+#define UTIL_H_
 
 #include <unistd.h>
 
@@ -19,7 +20,7 @@ struct proc_stat_s
     int session;                              // %d
     int tty_nr;                               // %d
     int tpgid;                                // %d
-    unsigned long flags;                      // %lu
+    unsigned long flags;                      // %lu OR %l
     unsigned long minflt;                     // %lu
     unsigned long cminflt;                    // %lu
     unsigned long majflt;                     // %lu
@@ -73,3 +74,5 @@ inline int read_stat(pid_t pid, struct proc_stat_s *s)
     }
     return 0;
 }
+
+#endif /* UTIL_H_ */
