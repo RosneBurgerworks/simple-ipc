@@ -86,9 +86,11 @@ public:
         if (is_manager)
         {
             // Unmap shared memory
-            if (mem_map != nullptr)
+            if (memory != nullptr)
             {
-                delete mem_map;
+                if (munmap(memory, sizeof(memory_t)) == -1)
+                    throw std::runtime_error("Failed to unmap memory: " + std::string(strerror(errno)));
+
                 memory = nullptr;
             }
 
@@ -149,8 +151,8 @@ public:
         }
 
         // Map the shared memory into this process's address space
-        mem_map = new boost::interprocess::mapped_region(shm_obj, boost::interprocess::read_write);
-        memory = static_cast<memory_t *>(mem_map->get_address());
+        boost::interprocess::mapped_region region(shm_obj, boost::interprocess::read_write);
+        memory = static_cast<memory_t *>(region.get_address());
 
         pool = std::make_unique<simple_ipc::CatMemoryPool>(&memory->pool, pool_size);
 
@@ -321,7 +323,6 @@ public:
         cmd.command_number = memory->command_count;
     }
 
-    boost::interprocess::mapped_region *mem_map{ nullptr };
     memory_t *memory{ nullptr };
     bool connected{ false };
     int client_id{ 0 };
