@@ -173,7 +173,7 @@ public:
 
         if (!is_ghost)
         {
-            heartbeat_thread = std::jthread(Heartbeat, &this->shutting_down, &memory->peer_data[client_id]);
+            heartbeat_thread = std::jthread(Heartbeat, this->shutting_down, &memory->peer_data[client_id]);
             if (!heartbeat_thread.joinable())
                 throw std::runtime_error("Failed to crate heartbeat thread: " + std::string(strerror(errno)));
         }
