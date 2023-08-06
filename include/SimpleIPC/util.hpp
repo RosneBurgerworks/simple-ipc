@@ -74,3 +74,4 @@ inline int readProcessStat(pid_t pid, struct ProcessStat *stat) {
 }
 
 #endif /* UTIL_H_ */
+// lol
