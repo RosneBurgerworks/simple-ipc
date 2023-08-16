@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.5)
 
 project(SimpleIPC LANGUAGES C VERSION 0.0.1)
 
