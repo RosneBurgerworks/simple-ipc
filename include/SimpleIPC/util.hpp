@@ -1,8 +1,8 @@
 /*
  * util.h
  *
- * Created on: Mar 19, 2017
- * Author: nullifiedcat
+ *  Created on: Mar 19, 2017
+ *      Author: nullifiedcat
  */
 
 #ifndef UTIL_H_
@@ -10,7 +10,8 @@
 
 #include <unistd.h>
 
-struct ProcessStat {
+struct proc_stat_s
+{
     int pid;                                  // %d
     char comm[256];                           // %s
     char state;                               // %c
@@ -55,20 +56,21 @@ struct ProcessStat {
     unsigned long long delayacct_blkio_ticks; // %llu
 };
 
-inline int readProcessStat(pid_t pid, struct ProcessStat *stat) {
-    static const char *const procFilePath = "/proc/%d/stat";
-    static const char *const format = "%d %s %c %d %d %d %d %d %lu %lu %lu %lu %lu %lu %lu %ld %ld %ld %ld %ld %ld %lu %lu %ld %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %d %d %lu %lu %llu";
+inline int read_stat(pid_t pid, struct proc_stat_s *s)
+{
+    static const char *const procfile = "/proc/%d/stat";
+    static const char *const format   = "%d %s %c %d %d %d %d %d %lu %lu %lu %lu %lu %lu %lu %ld %ld %ld %ld %ld %ld %lu %lu %ld %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %d %d %lu %lu %llu";
 
     char buf[128];
-    sprintf(buf, procFilePath, pid);
+    sprintf(buf, procfile, pid);
 
-    FILE *procFile = fopen(buf, "r");
-    if (procFile) {
-        int ret = fscanf(procFile, format, &stat->pid, stat->comm, &stat->state, &stat->ppid, &stat->pgrp, &stat->session, &stat->tty_nr, &stat->tpgid, &stat->flags, &stat->minflt, &stat->cminflt, &stat->majflt, &stat->cmajflt, &stat->utime, &stat->stime, &stat->cutime, &stat->cstime, &stat->priority, &stat->nice, &stat->num_threads, &stat->itrealvalue, &stat->starttime, &stat->vsize, &stat->rss, &stat->rlim, &stat->startcode, &stat->endcode, &stat->startstack, &stat->kstkesp, &stat->kstkeip, &stat->signal, &stat->blocked, &stat->sigignore, &stat->sigcatch, &stat->wchan, &stat->nswap, &stat->cnswap, &stat->exit_signal, &stat->processor, &stat->rt_priority, &stat->policy, &stat->delayacct_blkio_ticks);
-        fclose(procFile);
-        if (ret == 42) {
+    FILE *proc = fopen(buf, "r");
+    if (proc)
+    {
+        int ret = fscanf(proc, format, &s->pid, s->comm, &s->state, &s->ppid, &s->pgrp, &s->session, &s->tty_nr, &s->tpgid, &s->flags, &s->minflt, &s->cminflt, &s->majflt, &s->cmajflt, &s->utime, &s->stime, &s->cutime, &s->cstime, &s->priority, &s->nice, &s->num_threads, &s->itrealvalue, &s->starttime, &s->vsize, &s->rss, &s->rlim, &s->startcode, &s->endcode, &s->startstack, &s->kstkesp, &s->kstkeip, &s->signal, &s->blocked, &s->sigignore, &s->sigcatch, &s->wchan, &s->nswap, &s->cnswap, &s->exit_signal, &s->processor, &s->rt_priority, &s->policy, &s->delayacct_blkio_ticks);
+        fclose(proc);
+        if (ret == 42)
             return 1;
-        }
     }
     return 0;
 }
