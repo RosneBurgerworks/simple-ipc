@@ -52,7 +52,10 @@ public:
     {
         auto block = FindBlock(size);
         if (!block)
+        {
             return nullptr;
+        }
+
         ChipBlock(block, size);
         block->free = false;
         return reinterpret_cast<void *>(reinterpret_cast<std::uintptr_t>(block.get()) + sizeof(PoolBlock));
@@ -79,7 +82,10 @@ public:
             info.blkcnt++;
 
             if (!current->next)
+            {
                 break;
+            }
+
             current = real_pointer(current->next.get());
         }
         info.alloc    = size - info.free;
@@ -106,9 +112,15 @@ private:
         while (current)
         {
             if (current->free && current->size >= size)
+            {
                 return reinterpret_cast<const std::shared_ptr<simple_ipc::CatMemoryPool::PoolBlock> &>(current);
+            }
+
             if (!current->next)
+            {
                 break;
+            }
+
             current = real_pointer(current->next.get());
         }
         return nullptr;
@@ -127,7 +139,10 @@ private:
             new_block.size    = old_size - (size + sizeof(PoolBlock));
             void *p_new_block = reinterpret_cast<void *>(reinterpret_cast<unsigned int>(pool_pointer(block.get())) + sizeof(PoolBlock) + block->size);
             if (block->next)
+            {
                 real_pointer(block->next.get())->prev = std::make_shared<PoolBlock>(*static_cast<PoolBlock *>(p_new_block));
+            }
+
             block->next = std::make_shared<PoolBlock>(*static_cast<PoolBlock *>(p_new_block));
             std::memcpy(real_pointer(p_new_block), &new_block, sizeof(PoolBlock));
         }
@@ -152,9 +167,13 @@ private:
                 block->size += sizeof(PoolBlock) + cur_next->size;
                 DeleteBlock(cur_next);
                 if (block->next)
+                {
                     cur_next = real_pointer(block->next.get());
+                }
                 else
+                {
                     break;
+                }
             }
         }
     }
@@ -162,9 +181,14 @@ private:
     void DeleteBlock(PoolBlock *block) const
     {
         if (block->next)
+        {
             real_pointer(block->next.get())->prev = block->prev;
+        }
+
         if (block->prev)
+        {
             real_pointer(block->prev.get())->next = block->next;
+        }
     }
 };
 } // namespace simple_ipc

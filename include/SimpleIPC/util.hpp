@@ -60,7 +60,7 @@ struct ProcStat
     unsigned long long delayacct_blkio_ticks;
 };
 
-inline int ReadStat(pid_t pid, ProcStat *s)
+inline bool ReadStat(pid_t pid, ProcStat *s)
 {
     std::string procfile = "/proc/" + std::to_string(pid) + "/stat";
     std::ifstream proc(procfile);
@@ -72,7 +72,9 @@ inline int ReadStat(pid_t pid, ProcStat *s)
         std::stringstream ss(line);
 
         if (ss >> s->pid >> s->comm >> s->state >> s->ppid >> s->pgrp >> s->session >> s->tty_nr >> s->tpgid >> s->flags >> s->minflt >> s->cminflt >> s->majflt >> s->cmajflt >> s->utime >> s->stime >> s->cutime >> s->cstime >> s->priority >> s->nice >> s->num_threads >> s->itrealvalue >> s->starttime >> s->vsize >> s->rss >> s->rlim >> s->startcode >> s->endcode >> s->startstack >> s->kstkesp >> s->kstkeip >> s->signal >> s->blocked >> s->sigignore >> s->sigcatch >> s->wchan >> s->nswap >> s->cnswap >> s->exit_signal >> s->processor >> s->rt_priority >> s->policy >> s->delayacct_blkio_ticks)
-            return 1;
+        {
+            return true;
+        }
     }
-    return 0;
+    return false;
 }
