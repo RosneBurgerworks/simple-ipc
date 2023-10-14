@@ -7,11 +7,9 @@
 
 #pragma once
 
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <iostream>
+#include <boost/interprocess/sync/interprocess_mutex.hpp>
+#include <boost/interprocess/shared_memory_object.hpp>
+#include <boost/interprocess/mapped_region.hpp>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -49,112 +47,20 @@ struct Command
     unsigned char cmd_data[command_data];
 };
 
-class InterprocessMutex
-{
-public:
-    explicit InterprocessMutex(const char *name) : name(name)
-    {
-        sem = sem_open(name, O_CREAT, 0666, 1); // 0666 permissions allow all users to open the semaphore
-        if (sem == SEM_FAILED)
-        {
-            throw std::runtime_error("Error creating semaphore");
-        }
-    }
-
-    ~InterprocessMutex()
-    {
-        sem_close(sem);
-        sem_unlink(name);
-    }
-
-    void lock()
-    {
-        sem_wait(sem);
-    }
-
-    void unlock()
-    {
-        sem_post(sem);
-    }
-
-private:
-    sem_t *sem;
-    const char *name;
-};
-
-class SharedMemory
-{
-public:
-    SharedMemory(const char *name, std::size_t size, bool isManager) : size(size), name(name), isManager(isManager)
-    {
-        if (isManager)
-        {
-            shm_unlink(name); // Ensure it doesn't exist
-
-            fd = shm_open(name, O_CREAT | O_RDWR, 0666);
-            if (fd == -1)
-            {
-                throw std::runtime_error("Error creating shared memory");
-            }
-
-            if (ftruncate(fd, size) == -1)
-            {
-                throw std::runtime_error("Error setting shared memory size");
-            }
-        }
-        else
-        {
-            fd = shm_open(name, O_RDWR, 0666);
-            if (fd == -1)
-            {
-                throw std::runtime_error("Error opening existing shared memory");
-            }
-        }
-
-        data = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        if (data == MAP_FAILED)
-        {
-            throw std::runtime_error("Error mapping shared memory");
-        }
-    }
-
-    ~SharedMemory()
-    {
-        munmap(data, size);
-        close(fd);
-        if (isManager)
-        {
-            shm_unlink(name);
-        }
-    }
-
-    void *getData()
-    {
-        return data;
-    }
-
-private:
-    int fd;
-    void *data;
-    std::size_t size;
-    const char *name;
-    bool isManager;
-};
-
 // S = struct for global data
 // U = struct for peer data
 template <typename S, typename U> struct IPCMemory
 {
     static_assert(std::is_standard_layout<S>::value && std::is_trivial<S>::value, "Global data struct must be POD");
     static_assert(std::is_standard_layout<U>::value && std::is_trivial<U>::value, "Peer data struct must be POD");
-    InterprocessMutex mutex;                     // IPC mutex, must be locked every time you access IPCMemory
-    unsigned int peer_count{};                   // count of alive peers, managed by "manager" (server)
-    unsigned long command_count{};               // last command number + 1
-    PeerData peer_data[max_peers]{};             // state of each peer, managed by server
-    Command commands[command_buffer]{};          // command buffer, every peer can write/read here
-    std::array<unsigned char, pool_size> pool{}; // pool for storing command payloads
-    S global_data;                               // some data, struct is defined by user
-    std::array<U, max_peers> peer_user_data;     // some data for each peer, struct is defined by user
+    boost::interprocess::interprocess_mutex mutex; // IPC mutex, must be locked every time you access IPCMemory
+    unsigned int peer_count{};                     // count of alive peers, managed by "manager" (server)
+    unsigned long command_count{};                 // last command number + 1
+    PeerData peer_data[max_peers]{};               // state of each peer, managed by server
+    Command commands[command_buffer]{};            // command buffer, every peer can write/read here
+    std::array<unsigned char, pool_size> pool{};   // pool for storing command payloads
+    S global_data;                                 // some data, struct is defined by user
+    std::array<U, max_peers> peer_user_data;       // some data for each peer, struct is defined by user
 };
 
 template <typename S, typename U> class Peer
@@ -176,18 +82,28 @@ public:
     {
         shutting_down = true;
         if (heartbeat_thread.joinable())
-        {
             heartbeat_thread.join();
+
+        if (is_manager)
+        {
+            // Unmap shared memory
+            if (mem_map != nullptr)
+            {
+                delete mem_map;
+                memory = nullptr;
+            }
+
+            // Delete the shared memory object
+            if (shm_unlink(name.c_str()) == -1)
+                throw std::runtime_error("Failed to unlink shared memory: " + std::string(strerror(errno)));
         }
 
         if (is_ghost)
-        {
             return;
-        }
 
         if (memory)
         {
-            std::unique_lock<InterprocessMutex> lock(memory->mutex);
+            std::unique_lock<boost::interprocess::interprocess_mutex> lock(memory->mutex);
             memory->peer_data[client_id].free = true;
         }
     }
@@ -200,7 +116,7 @@ public:
         return last_command != memory->command_count;
     }
 
-    static void Heartbeat(const bool *shutting_down, PeerData *data)
+    static void Heartbeat(bool *shutting_down, PeerData *data)
     {
         while (!*shutting_down)
         {
@@ -216,27 +132,31 @@ public:
     {
         connected = true;
 
+        boost::interprocess::shared_memory_object shm_obj;
+
         if (is_manager)
         {
             // Create shared memory
-            sharedMemory = std::make_unique<SharedMemory>(name.c_str(), sizeof(memory_t), true);
+            boost::interprocess::shared_memory_object::remove(name.c_str()); // Ensure it doesn't exist
+            shm_obj = boost::interprocess::shared_memory_object(boost::interprocess::create_only, name.c_str(), boost::interprocess::read_write);
 
-            memory = static_cast<memory_t*>(sharedMemory->getData());
-            new (&memory->mutex) InterprocessMutex("IPC Server");
+            // Set size
+            shm_obj.truncate(sizeof(memory_t));
         }
         else
         {
             // Open existing shared memory
-            sharedMemory = std::make_unique<SharedMemory>(name.c_str(), sizeof(memory_t), false);
-            memory = static_cast<memory_t*>(sharedMemory->getData());
+            shm_obj = boost::interprocess::shared_memory_object(boost::interprocess::open_only, name.c_str(), boost::interprocess::read_write);
         }
 
-        pool = std::make_unique<simple_ipc::CatMemoryPool>(memory->pool.data(), pool_size);
+        // Map the shared memory into this process's address space
+        mem_map = new boost::interprocess::mapped_region(shm_obj, boost::interprocess::read_write);
+        memory = static_cast<memory_t *>(mem_map->get_address());
+
+        pool = std::make_unique<simple_ipc::CatMemoryPool>(&memory->pool, pool_size);
 
         if (is_manager)
-        {
             InitManager();
-        }
 
         if (!is_ghost)
         {
@@ -246,22 +166,16 @@ public:
             memory->mutex.unlock();
         }
         else
-        {
             client_id = -1;
-        }
 
         if (!process_old_commands)
-        {
             last_command = memory->command_count;
-        }
 
         if (!is_ghost)
         {
             heartbeat_thread = std::jthread(Heartbeat, &this->shutting_down, &memory->peer_data[client_id]);
             if (!heartbeat_thread.joinable())
-            {
-                throw std::runtime_error("Failed to create heartbeat thread: " + std::string(strerror(errno)));
-            }
+                throw std::runtime_error("Failed to crate heartbeat thread: " + std::string(strerror(errno)));
         }
     }
 
@@ -270,13 +184,9 @@ public:
      */
     int FirstAvailableSlot()
     {
-        for (int i = 0; i < max_peers; ++i)
-        {
+        for (unsigned int i = 0; i < max_peers; ++i)
             if (memory->peer_data[i].free)
-            {
-                return i;
-            }
-        }
+                return static_cast<int>(i);
 
         throw std::runtime_error("No available slots");
     }
@@ -297,9 +207,7 @@ public:
     {
         std::memset(memory, 0, sizeof(memory_t));
         for (int i = 0; i < max_peers; ++i)
-        {
             memory->peer_data[i].free = true;
-        }
         pool->init();
     }
 
@@ -313,14 +221,10 @@ public:
         for (int i = 0; i < max_peers; ++i)
         {
             if (IsPeerDead(i))
-            {
                 memory->peer_data[i].free = true;
-            }
 
             if (!memory->peer_data[i].free)
-            {
                 memory->peer_count++;
-            }
         }
         this->memory->mutex.unlock();
     }
@@ -331,21 +235,15 @@ public:
     void StorePeerData()
     {
         if (is_ghost)
-        {
             return;
-        }
 
-        pid_t pid = getpid();
         ProcStat stat{};
-        if (!ReadStat(pid, &stat))
-        {
-            return;
-        }
+        ReadStat(getpid(), &stat);
 
         auto &current_peer_data = memory->peer_data[client_id];
 
         current_peer_data.free      = false;
-        current_peer_data.pid       = pid;
+        current_peer_data.pid       = getpid();
         current_peer_data.starttime = stat.starttime;
     }
 
@@ -366,9 +264,7 @@ public:
         auto [iterator, inserted] = callback_map.insert({ command_type, handler });
 
         if (!inserted)
-        {
             throw std::logic_error("Single command type can't have multiple callbacks (" + std::to_string(command_type) + ")");
-        }
     }
 
     /*
@@ -381,28 +277,20 @@ public:
             Command &cmd = memory->commands[i];
 
             if (cmd.command_number <= last_command)
-            {
                 continue;
-            }
 
             last_command = cmd.command_number;
             if (cmd.sender == client_id || is_ghost || (cmd.target_peer >= 0 && cmd.target_peer != client_id))
-            {
                 continue;
-            }
 
             void *payload = cmd.payload_size ? pool->real_pointer<void>(reinterpret_cast<void *>(cmd.payload_offset)) : nullptr;
 
             if (callback)
-            {
                 callback(cmd, payload);
-            }
 
             auto callback_it = callback_map.find(cmd.cmd_type);
             if (callback_it != callback_map.end())
-            {
                 callback_it->second(cmd, payload);
-            }
         }
     }
 
@@ -419,12 +307,8 @@ public:
             cmd.payload_offset = 0;
             cmd.payload_size   = 0;
         }
-
         if (data_small)
-        {
             std::memcpy(cmd.cmd_data, data_small, sizeof(cmd.cmd_data));
-        }
-
         if (payload_size)
         {
             void *block = pool->alloc(payload_size);
@@ -438,6 +322,7 @@ public:
         cmd.command_number = memory->command_count;
     }
 
+    boost::interprocess::mapped_region *mem_map{ nullptr };
     memory_t *memory{ nullptr };
     bool connected{ false };
     int client_id{ 0 };
@@ -445,7 +330,6 @@ public:
     std::shared_ptr<simple_ipc::CatMemoryPool> pool{ nullptr };
 
 private:
-    std::unique_ptr<SharedMemory> sharedMemory;
     std::unordered_map<unsigned int, CommandCallbackFn_t> callback_map{};
     unsigned long last_command{ 0 };
     CommandCallbackFn_t callback{ nullptr };
@@ -453,6 +337,6 @@ private:
     bool process_old_commands{ true };
     const bool is_manager{ false };
     std::jthread heartbeat_thread;
-    bool shutting_down{ false };
+    bool shutting_down{false};
 };
 } // namespace cat_ipc
